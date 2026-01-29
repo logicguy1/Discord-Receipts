@@ -21,18 +21,20 @@ class ReceiptPrinter:
         self.ip = ip
         self.port = port
         self.width = width
-        self.printer = None
+        print(f'Printer configured for {ip}:{port}', file=sys.stderr)
 
+    def _connect(self) -> Network | None:
+        """
+        Establish a connection to the printer.
+
+        Returns:
+            Network printer instance or None if connection fails
+        """
         try:
-            self.printer = Network(ip, port)
-            print(f'Connected to printer at {ip}:{port}', file=sys.stderr)
+            return Network(self.ip, self.port)
         except Exception as e:
-            print(f'Warning: Could not connect to printer at {ip}:{port}', file=sys.stderr)
-            print(f'Error: {e}', file=sys.stderr)
-
-    def is_connected(self) -> bool:
-        """Check if printer is connected."""
-        return self.printer is not None
+            print(f'Failed to connect to printer at {self.ip}:{self.port}: {e}', file=sys.stderr)
+            return None
 
     def _download_and_process_avatar(self, avatar_url: str, size: int = 80) -> Image.Image | None:
         """
@@ -105,7 +107,9 @@ class ReceiptPrinter:
             message: Discord message object
             target_user_id: ID of the user being monitored
         """
-        if not self.printer:
+        # Connect to printer for this print job
+        printer = self._connect()
+        if not printer:
             return
 
         try:
@@ -129,79 +133,85 @@ class ReceiptPrinter:
                        message.reference.resolved.author.id == target_user_id)
 
             # Server/Channel header
-            self._print_channel_header(message)
+            self._print_channel_header(printer, message)
 
             # Reply indicator if applicable
             if is_reply:
-                self._print_reply_indicator(message.reference.resolved)
+                self._print_reply_indicator(printer, message.reference.resolved)
 
             # Small profile picture on the left
-            self._print_avatar(message.author.display_avatar.url)
+            self._print_avatar(printer, message.author.display_avatar.url)
 
             # Author name and timestamp on same line
-            self._print_author_line(message.author.display_name, timestamp, is_mention, is_role_mention, is_everyone)
+            self._print_author_line(printer, message.author.display_name, timestamp, is_mention, is_role_mention, is_everyone)
 
             # Message content
-            self._print_content(message.content)
+            self._print_content(printer, message.content)
 
             # Print image attachments if any
-            self._print_attachments(message)
+            self._print_attachments(printer, message)
 
             # Separator
-            self._print_separator()
+            self._print_separator(printer)
 
         except Exception as e:
             print(f'Error printing to receipt printer: {e}', file=sys.stderr)
+        finally:
+            # Close the connection
+            try:
+                printer.close()
+            except:
+                pass
 
-    def _print_channel_header(self, message):
+    def _print_channel_header(self, printer, message):
         """Print server/channel header."""
-        self.printer.set(align='left', font='b', bold=True)
+        printer.set(align='left', font='b', bold=True)
         if message.guild:
-            self.printer.text(f'# {message.channel.name}\n')
-            self.printer.set(font='b', bold=False)
-            self.printer.text(f'{message.guild.name}\n')
+            printer.text(f'# {message.channel.name}\n')
+            printer.set(font='b', bold=False)
+            printer.text(f'{message.guild.name}\n')
         else:
-            self.printer.text('DIRECT MESSAGE\n')
-        self.printer.text('\n')
+            printer.text('DIRECT MESSAGE\n')
+        printer.text('\n')
 
-    def _print_reply_indicator(self, replied_message):
+    def _print_reply_indicator(self, printer, replied_message):
         """Print reply indicator."""
-        self.printer.set(align='left', font='b', bold=False)
-        self.printer.text(f'  Replying to {replied_message.author.name}\n')
-        self.printer.text('\n')
+        printer.set(align='left', font='b', bold=False)
+        printer.text(f'  Replying to {replied_message.author.name}\n')
+        printer.text('\n')
 
-    def _print_avatar(self, avatar_url: str):
+    def _print_avatar(self, printer, avatar_url: str):
         """Print the user's small avatar on the left."""
         img = self._download_and_process_avatar(avatar_url, size=64)
         if img:
-            self.printer.set(align='left')
-            self.printer.image(img, impl='bitImageColumn')
+            printer.set(align='left')
+            printer.image(img, impl='bitImageColumn')
 
-    def _print_author_line(self, author_name: str, timestamp: str, is_mention: bool, is_role_mention: bool = False, is_everyone: bool = False):
+    def _print_author_line(self, printer, author_name: str, timestamp: str, is_mention: bool, is_role_mention: bool = False, is_everyone: bool = False):
         """Print author name and timestamp."""
-        self.printer.set(align='left', font='a', bold=True)
+        printer.set(align='left', font='a', bold=True)
 
         # Author name
-        self.printer.text(f'{author_name}')
+        printer.text(f'{author_name}')
 
         # Mention badges
-        self.printer.set(bold=False)
+        printer.set(bold=False)
         if is_mention:
-            self.printer.text(' @')
+            printer.text(' @')
 
         if is_role_mention:
-            self.printer.text(' @role')
+            printer.text(' @role')
 
         if is_everyone:
-            self.printer.text(' @everyone')
+            printer.text(' @everyone')
 
         # Timestamp
-        self.printer.set(bold=False)
-        self.printer.text(f'  {timestamp}\n')
+        printer.set(bold=False)
+        printer.text(f'  {timestamp}\n')
 
-    def _print_content(self, content: str):
+    def _print_content(self, printer, content: str):
         """Print the message content with word wrapping."""
-        self.printer.set(align='left', font='a', bold=False)
+        printer.set(align='left', font='a', bold=False)
 
         # Word wrap for long messages
         words = content.split()
@@ -210,12 +220,12 @@ class ReceiptPrinter:
             if len(line + word) < self.width:
                 line += word + " "
             else:
-                self.printer.text(line + '\n')
+                printer.text(line + '\n')
                 line = word + " "
         if line:
-            self.printer.text(line + '\n')
+            printer.text(line + '\n')
 
-    def _print_attachments(self, message):
+    def _print_attachments(self, printer, message):
         """Print image attachments from the message."""
         if not message.attachments:
             return
@@ -231,21 +241,21 @@ class ReceiptPrinter:
             return
 
         # Add spacing before images
-        self.printer.text('\n')
+        printer.text('\n')
 
         # Print each image attachment
         for attachment in image_attachments:
-            self.printer.set(align='left', font='b', bold=False)
-            self.printer.text(f'[Image: {attachment.filename}]\n')
+            printer.set(align='left', font='b', bold=False)
+            printer.text(f'[Image: {attachment.filename}]\n')
 
             img = self._download_and_process_image(attachment.url)
             if img:
-                self.printer.set(align='center')
-                self.printer.image(img, impl='bitImageColumn')
-                self.printer.text('\n')
+                printer.set(align='center')
+                printer.image(img, impl='bitImageColumn')
+                printer.text('\n')
             else:
-                self.printer.text('(Failed to load image)\n')
+                printer.text('(Failed to load image)\n')
 
-    def _print_separator(self):
+    def _print_separator(self, printer):
         """Print a separator line and cut."""
-        self.printer.cut()
+        printer.cut()
