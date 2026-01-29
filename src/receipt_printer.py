@@ -63,6 +63,40 @@ class ReceiptPrinter:
             print(f'Could not fetch/process avatar: {e}', file=sys.stderr)
             return None
 
+    def _download_and_process_image(self, image_url: str, max_width: int = 384) -> Image.Image | None:
+        """
+        Download and process an image attachment for printing.
+
+        Args:
+            image_url: URL of the image
+            max_width: Maximum width in pixels (default: 384 for thermal printers)
+
+        Returns:
+            Processed PIL Image or None if failed
+        """
+        try:
+            response = requests.get(image_url, timeout=10)
+            if response.status_code == 200:
+                # Open image and convert to grayscale
+                img = Image.open(BytesIO(response.content))
+                img = img.convert('L')
+
+                # Calculate new dimensions maintaining aspect ratio
+                aspect_ratio = img.height / img.width
+                new_width = min(img.width, max_width)
+                new_height = int(new_width * aspect_ratio)
+
+                # Resize image
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                # Convert to black and white with dithering
+                img = img.convert('1')
+
+                return img
+        except Exception as e:
+            print(f'Could not fetch/process image: {e}', file=sys.stderr)
+            return None
+
     def print_message(self, message, target_user_id: int):
         """
         Print a Discord message to the receipt printer.
@@ -109,6 +143,9 @@ class ReceiptPrinter:
 
             # Message content
             self._print_content(message.content)
+
+            # Print image attachments if any
+            self._print_attachments(message)
 
             # Separator
             self._print_separator()
@@ -177,6 +214,37 @@ class ReceiptPrinter:
                 line = word + " "
         if line:
             self.printer.text(line + '\n')
+
+    def _print_attachments(self, message):
+        """Print image attachments from the message."""
+        if not message.attachments:
+            return
+
+        # Filter for image attachments
+        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}
+        image_attachments = [
+            att for att in message.attachments
+            if any(att.filename.lower().endswith(ext) for ext in image_extensions)
+        ]
+
+        if not image_attachments:
+            return
+
+        # Add spacing before images
+        self.printer.text('\n')
+
+        # Print each image attachment
+        for attachment in image_attachments:
+            self.printer.set(align='left', font='b', bold=False)
+            self.printer.text(f'[Image: {attachment.filename}]\n')
+
+            img = self._download_and_process_image(attachment.url)
+            if img:
+                self.printer.set(align='center')
+                self.printer.image(img, impl='bitImageColumn')
+                self.printer.text('\n')
+            else:
+                self.printer.text('(Failed to load image)\n')
 
     def _print_separator(self):
         """Print a separator line and cut."""
